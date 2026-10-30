@@ -580,7 +580,126 @@ static void ws2812_rmt_send(const CRGB* leds, uint16_t num_leds,
 }
 
 #endif // ESP_IDF_VERSION >= 5.0.0
-#endif // ESP32
+
+#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+// ============================================================================
+// Raspberry Pi Pico (RP2040) Hardware PIO Driver
+// ============================================================================
+#include "hardware/pio.h"
+#include "hardware/clocks.h"
+
+#define WS2812_T1 3
+#define WS2812_T2 3
+#define WS2812_T3 4
+
+static const uint16_t ws2812_program_instructions[] = {
+    // .wrap_target
+    0x6321, // 0: out    x, 1           side 0 [3]
+    0x1223, // 1: jmp    !x, 3          side 1 [2]
+    0x1200, // 2: jmp    0              side 1 [2]
+    0xa242  // 3: nop                   side 0 [2]
+    // .wrap
+};
+
+static const struct pio_program ws2812_program = {
+    .instructions = ws2812_program_instructions,
+    .length = 4,
+    .origin = -1,
+};
+
+static inline pio_sm_config ws2812_program_get_default_config(uint offset) {
+    pio_sm_config c = pio_get_default_sm_config();
+    sm_config_set_wrap(&c, offset + 0, offset + 3);
+    sm_config_set_sideset(&c, 1, false, false);
+    return c;
+}
+
+static PIO s_rp2040_pio = nullptr;
+static int s_rp2040_sm = -1;
+static uint s_rp2040_offset = 0;
+static uint8_t s_installed_pin = 255;
+
+static void ws2812_rp2040_init(uint8_t pin) {
+    if (s_rp2040_pio && s_installed_pin == pin) return;
+
+    if (s_rp2040_pio && s_rp2040_sm >= 0) {
+        pio_sm_set_enabled(s_rp2040_pio, s_rp2040_sm, false);
+        pio_sm_unclaim(s_rp2040_pio, s_rp2040_sm);
+        s_rp2040_sm = -1;
+    }
+
+    if (!s_rp2040_pio) {
+        if (pio_can_add_program(pio0, &ws2812_program)) {
+            s_rp2040_pio = pio0;
+            s_rp2040_offset = pio_add_program(pio0, &ws2812_program);
+        } else if (pio_can_add_program(pio1, &ws2812_program)) {
+            s_rp2040_pio = pio1;
+            s_rp2040_offset = pio_add_program(pio1, &ws2812_program);
+        } else {
+            return;
+        }
+    }
+
+    s_rp2040_sm = pio_claim_unused_sm(s_rp2040_pio, false);
+    if (s_rp2040_sm < 0) {
+        PIO other = (s_rp2040_pio == pio0) ? pio1 : pio0;
+        if (pio_can_add_program(other, &ws2812_program)) {
+            s_rp2040_pio = other;
+            s_rp2040_offset = pio_add_program(other, &ws2812_program);
+            s_rp2040_sm = pio_claim_unused_sm(other, false);
+        }
+    }
+    if (s_rp2040_sm < 0) return;
+
+    pio_gpio_init(s_rp2040_pio, pin);
+    pio_sm_set_consecutive_pindirs(s_rp2040_pio, s_rp2040_sm, pin, 1, true);
+
+    pio_sm_config c = ws2812_program_get_default_config(s_rp2040_offset);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, false, true, 24); // Shift MSB first, autopull 24 bits
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    int cycles_per_bit = WS2812_T1 + WS2812_T2 + WS2812_T3;
+    float div = (float)clock_get_hz(clk_sys) / (800000.0f * (float)cycles_per_bit);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(s_rp2040_pio, s_rp2040_sm, s_rp2040_offset, &c);
+    pio_sm_set_enabled(s_rp2040_pio, s_rp2040_sm, true);
+    s_installed_pin = pin;
+}
+
+static void ws2812_rp2040_send(const CRGB* leds, uint16_t num_leds,
+                              uint8_t scale_r, uint8_t scale_g, uint8_t scale_b,
+                              EOrder order) {
+    if (!s_rp2040_pio || s_rp2040_sm < 0 || !leds || num_leds == 0) return;
+
+    for (uint16_t i = 0; i < num_leds; i++) {
+        uint8_t r = scale8(leds[i].r, scale_r);
+        uint8_t g = scale8(leds[i].g, scale_g);
+        uint8_t b = scale8(leds[i].b, scale_b);
+
+        uint8_t c0, c1, c2;
+        switch (order) {
+            case RGB: c0 = r; c1 = g; c2 = b; break;
+            case RBG: c0 = r; c1 = b; c2 = g; break;
+            case BGR: c0 = b; c1 = g; c2 = r; break;
+            case BRG: c0 = b; c1 = r; c2 = g; break;
+            case GBR: c0 = g; c1 = b; c2 = r; break;
+            default:  // GRB (WS2812B standard)
+                      c0 = g; c1 = r; c2 = b; break;
+        }
+
+        uint32_t word = ((uint32_t)c0 << 24) | ((uint32_t)c1 << 16) | ((uint32_t)c2 << 8);
+        pio_sm_put_blocking(s_rp2040_pio, s_rp2040_sm, word);
+    }
+
+    // Wait until TX FIFO is completely drained
+    while (!pio_sm_is_tx_fifo_empty(s_rp2040_pio, s_rp2040_sm)) {
+        tight_loop_contents();
+    }
+}
+
+#endif // Platform drivers
 
 // ============================================================================
 // TinyLEDController Implementation
@@ -606,6 +725,8 @@ void TinyLEDController::init(uint8_t pin, uint16_t num_leds, CRGB* leds, EOrder 
     digitalWrite(m_pin, LOW);
 #elif defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
     ws2812_rmt_init(m_pin);
+#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+    ws2812_rp2040_init(m_pin);
 #endif
 
     m_initialized = true;
@@ -648,6 +769,8 @@ void TinyLEDController::show() {
 
 #if defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
     ws2812_rmt_init(m_pin);
+#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+    ws2812_rp2040_init(m_pin);
 #endif
 
     ws2812_wait_reset();
@@ -667,6 +790,8 @@ void TinyLEDController::show() {
     ws2812_esp8266_send(m_pin, m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);
 #elif defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
     ws2812_rmt_send(m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);
+#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+    ws2812_rp2040_send(m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);
 #endif
 
     ws2812_mark_reset();
