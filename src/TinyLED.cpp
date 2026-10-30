@@ -265,7 +265,20 @@ static inline void ws2812_mark_reset() {
 // Platform Drivers
 // ============================================================================
 
-#if defined(ESP8266)
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(CONFIG_IDF_TARGET_ESP32) || \
+    defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3) || \
+    defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C6) || \
+    defined(CONFIG_IDF_TARGET_ESP32H2)
+  #define _TINYLED_PLATFORM_ESP32 1
+#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350) || defined(ARDUINO_ARCH_PICO) || \
+      defined(PICO_RP2040) || defined(PICO_RP2350) || defined(TARGET_RP2040) || defined(TARGET_RP2350) || \
+      defined(RP2040) || defined(RP2350)
+  #define _TINYLED_PLATFORM_RP2040 1
+#elif defined(ESP8266)
+  #define _TINYLED_PLATFORM_ESP8266 1
+#endif
+
+#if defined(_TINYLED_PLATFORM_ESP8266)
 
 static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_t num_leds,
                                           uint8_t scale_r, uint8_t scale_g, uint8_t scale_b,
@@ -327,7 +340,7 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
     interrupts();
 }
 
-#elif defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
+#elif defined(_TINYLED_PLATFORM_ESP32)
 
 #include "esp_idf_version.h"
 
@@ -581,7 +594,7 @@ static void ws2812_rmt_send(const CRGB* leds, uint16_t num_leds,
 
 #endif // ESP_IDF_VERSION >= 5.0.0
 
-#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+#elif defined(_TINYLED_PLATFORM_RP2040)
 // ============================================================================
 // Raspberry Pi Pico (RP2040) Hardware PIO Driver
 // ============================================================================
@@ -720,12 +733,12 @@ void TinyLEDController::init(uint8_t pin, uint16_t num_leds, CRGB* leds, EOrder 
     m_leds = leds;
     m_order = order;
 
-#if defined(ESP8266)
+#if defined(_TINYLED_PLATFORM_ESP8266)
     pinMode(m_pin, OUTPUT);
     digitalWrite(m_pin, LOW);
-#elif defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
+#elif defined(_TINYLED_PLATFORM_ESP32)
     ws2812_rmt_init(m_pin);
-#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+#elif defined(_TINYLED_PLATFORM_RP2040)
     ws2812_rp2040_init(m_pin);
 #endif
 
@@ -767,9 +780,9 @@ void TinyLEDController::clearData() {
 void TinyLEDController::show() {
     if (!m_initialized || !m_leds || m_num_leds == 0) return;
 
-#if defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
+#if defined(_TINYLED_PLATFORM_ESP32)
     ws2812_rmt_init(m_pin);
-#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+#elif defined(_TINYLED_PLATFORM_RP2040)
     ws2812_rp2040_init(m_pin);
 #endif
 
@@ -786,11 +799,11 @@ void TinyLEDController::show() {
     uint8_t scale_g = scale8(effective_brightness, m_correction.g);
     uint8_t scale_b = scale8(effective_brightness, m_correction.b);
 
-#if defined(ESP8266)
+#if defined(_TINYLED_PLATFORM_ESP8266)
     ws2812_esp8266_send(m_pin, m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);
-#elif defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
+#elif defined(_TINYLED_PLATFORM_ESP32)
     ws2812_rmt_send(m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);
-#elif defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(TARGET_RP2040) || defined(RP2040)
+#elif defined(_TINYLED_PLATFORM_RP2040)
     ws2812_rp2040_send(m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);
 #endif
 
