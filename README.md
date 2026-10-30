@@ -64,6 +64,19 @@ lib_deps =
 
 ---
 
+## Примеры скетчей
+
+В папке [`examples/`](examples/) представлены готовые примеры использования:
+1. **[TinyLED_Demo](examples/TinyLED_Demo/TinyLED_Demo.ino)** — базовый пример работы через шаблонный класс `TinyLED<PIN, NUM_LEDS, ORDER>` с собственным буфером.
+2. **[FastLED_Compatibility](examples/FastLED_Compatibility/FastLED_Compatibility.ino)** — пример прямой замены FastLED с внешним массивом пикселей, генератором радуги и палитрами.
+3. **[Advanced_Demo](examples/Advanced_Demo/Advanced_Demo.ino)** — продвинутый демонстрационный скетч:
+   * Координатная матрица 32×8 (зигзаг / serpentine)
+   * Двойная буферизация с плавным переходом (`crossFade` / `blend`)
+   * 6 динамических визуальных эффектов: 2D-плазма (`xyMatrix`), радуга с блёстками (`rainbowWithGlitter`), конфетти (`confetti`), бегущий огонёк (`sinelon`), жонглёр (`juggle`), палитра PartyColors (`bpm`)
+   * Автоматическая смена шаблонов каждые 10 секунд и вывод диагностики в Serial.
+
+---
+
 ## Архитектура аппаратных драйверов
 
 ### 1. ESP8266 (Xtensa lx106, 80 МГц / 160 МГц)

@@ -64,6 +64,19 @@ lib_deps =
 
 ---
 
+## Example Sketches
+
+The [`examples/`](examples/) folder contains ready-to-run examples:
+1. **[TinyLED_Demo](examples/TinyLED_Demo/TinyLED_Demo.ino)** — Basic usage of the standalone `TinyLED<PIN, NUM_LEDS, ORDER>` template class with an internal buffer.
+2. **[FastLED_Compatibility](examples/FastLED_Compatibility/FastLED_Compatibility.ino)** — FastLED drop-in replacement with an external pixel buffer, rainbow generator, and color palettes.
+3. **[Advanced_Demo](examples/Advanced_Demo/Advanced_Demo.ino)** — Advanced full-feature demo sketch:
+   * 32×8 serpentine 2D matrix coordinate mapping
+   * Dual-buffer frame blending and crossfading (`crossFade` / `blend`)
+   * 6 animated visual effects: 2D plasma wave (`xyMatrix`), rainbow with glitter (`rainbowWithGlitter`), confetti (`confetti`), sinelon sweeping dot (`sinelon`), juggle multi-phase dots (`juggle`), PartyColors palette beat (`bpm`)
+   * Automatic pattern playlist cycling every 10 seconds and Serial diagnostics.
+
+---
+
 ## Hardware Driver Architecture
 
 ### 1. ESP8266 (Xtensa lx106, 80 MHz / 160 MHz)
