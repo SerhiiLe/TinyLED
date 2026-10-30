@@ -17,7 +17,6 @@
 */
 
 #include <Arduino.h>
-#include <FastLED.h>
 #include <TinyLED.h>
 
 // Automatically select appropriate default pin for each platform
@@ -286,3 +285,4 @@ void loop() {
 
     delay(15);
 }
+

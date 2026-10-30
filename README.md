@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/SerhiiLe/TinyLED/releases"><img src="https://img.shields.io/github/v/release/SerhiiLe/TinyLED?include_prereleases&color=blue" alt="Latest Release"></a>
-  <a href="https://registry.platformio.org/libraries/serhiile/TinyLED"><img src="https://badges.registry.platformio.org/packages/serhiile/library/TinyLED.svg" alt="PlatformIO Registry"></a>
+  <a href="https://registry.platformio.org/libraries/slebedenko/TinyLED"><img src="https://badges.registry.platformio.org/packages/slebedenko/library/TinyLED.svg" alt="PlatformIO Registry"></a>
   <a href="https://www.arduino.cc/reference/en/libraries/tinyled/"><img src="https://img.shields.io/badge/Arduino-TinyLED-00979C.svg?logo=arduino" alt="Arduino Library"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-LGPL_v3-green.svg" alt="License: LGPL v3"></a>
 </p>
@@ -12,6 +12,13 @@
 </p>
 
 ---
+
+Ultra-lightweight, high-performance, and standalone C++ library for WS2812B (NeoPixel) addressable LEDs on:
+* **ESP8266** (NodeMCU, Wemos D1 mini, etc.)
+* **ESP32**, **ESP32-S2**, **ESP32-S3**, **ESP32-C3**, **ESP32-C6**, **ESP32-H2**
+* **RP2040** (Raspberry Pi Pico / Pico W) and **RP2350** (Raspberry Pi Pico 2)
+
+Designed as a **drop-in replacement** for FastLED in smart clock, scrolling text, information board, and LED matrix projects.
 
 Сверхлегкая, высокопроизводительная и независимая C++ библиотека для адресных светодиодов WS2812B (NeoPixel) на микроконтроллерах:
 * **ESP8266** (NodeMCU, Wemos D1 mini и др.)
