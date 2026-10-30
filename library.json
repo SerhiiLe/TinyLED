@@ -1,0 +1,14 @@
+{
+  "name": "TinyLED",
+  "version": "1.0.0",
+  "description": "Ultra-lightweight WS2812B LED library for ESP8266, ESP32, and ESP32-C3 with FastLED API compatibility.",
+  "keywords": "ws2812, ws2812b, neopixel, led, tinyled, fastled, esp8266, esp32, esp32c3",
+  "authors": {
+    "name": "SerhiiLe"
+  },
+  "frameworks": "arduino",
+  "platforms": [
+    "espressif8266",
+    "espressif32"
+  ]
+}
