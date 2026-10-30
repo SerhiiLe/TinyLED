@@ -655,7 +655,8 @@ static void ws2812_rp2040_init(uint8_t pin) {
 
     s_rp2040_sm = pio_claim_unused_sm(s_rp2040_pio, false);
     if (s_rp2040_sm < 0) {
-        PIO other = (s_rp2040_pio == pio0) ? pio1 : pio0;
+        PIO other = pio0;
+        if (s_rp2040_pio == pio0) other = pio1;
         if (pio_can_add_program(other, &ws2812_program)) {
             s_rp2040_pio = other;
             s_rp2040_offset = pio_add_program(other, &ws2812_program);

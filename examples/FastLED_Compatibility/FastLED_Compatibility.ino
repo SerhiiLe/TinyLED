@@ -1,7 +1,10 @@
 #include <Arduino.h>
 #include <FastLED.h>
 
-#if defined(ESP32C3)
+// Automatically select default test pin per architecture
+#if defined(ARDUINO_ARCH_RP2040) || defined(PICO_RP2040) || defined(ARDUINO_RASPBERRY_PI_PICO)
+  #define PIN_LED 16
+#elif defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C3)
   #define PIN_LED 6
 #elif defined(ESP32)
   #define PIN_LED 22
@@ -16,9 +19,10 @@ uint8_t gHue = 0;
 
 void setup() {
     Serial.begin(115200);
+    // Initialize FastLED drop-in controller
     FastLED.addLeds<WS2812B, PIN_LED, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
     FastLED.setBrightness(80);
-    FastLED.setMaxPowerInVoltsAndMilliamps(5, 1000);
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, 1000); // 5V, 1000 mA current limit
     FastLED.clear();
     FastLED.show();
 }
@@ -43,4 +47,3 @@ void loop() {
         gHue++;
     }
 }
-

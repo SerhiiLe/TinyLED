@@ -1,15 +1,47 @@
 {
   "name": "TinyLED",
   "version": "1.0.0",
-  "description": "Ultra-lightweight WS2812B LED library for ESP8266, ESP32, ESP32-C3, and RP2040 with FastLED API compatibility.",
-  "keywords": "ws2812, ws2812b, neopixel, led, tinyled, fastled, esp8266, esp32, esp32c3, rp2040, pico",
-  "authors": {
-    "name": "SerhiiLe"
+  "description": "Ultra-lightweight, zero-allocation WS2812B LED library for ESP8266, ESP32 (ESP32/S2/S3/C3/C6), and RP2040/RP2350 with FastLED drop-in API.",
+  "keywords": [
+    "ws2812",
+    "ws2812b",
+    "neopixel",
+    "led",
+    "tinyled",
+    "fastled",
+    "esp8266",
+    "esp32",
+    "esp32s2",
+    "esp32s3",
+    "esp32c3",
+    "esp32c6",
+    "rp2040",
+    "rp2350",
+    "pico",
+    "matrix",
+    "display"
+  ],
+  "authors": [
+    {
+      "name": "SerhiiLe",
+      "maintainer": true
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SerhiiLe/TinyLED.git"
   },
-  "frameworks": "arduino",
+  "homepage": "https://github.com/SerhiiLe/TinyLED",
+  "license": "LGPL-3.0-or-later",
+  "frameworks": ["arduino"],
   "platforms": [
     "espressif8266",
     "espressif32",
     "raspberrypi"
-  ]
+  ],
+  "headers": [
+    "TinyLED.h",
+    "FastLED.h"
+  ],
+  "examples": "examples/*/*.ino"
 }
