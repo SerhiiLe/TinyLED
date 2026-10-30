@@ -280,57 +280,128 @@ static inline void ws2812_mark_reset() {
 
 #if defined(_TINYLED_PLATFORM_ESP8266)
 
-static inline uint32_t IRAM_ATTR _get_ccount(void) {
-    uint32_t r;
-    __asm__ __volatile__("rsr %0, ccount" : "=a"(r));
-    return r;
+struct FASTLED_ESP_IO {
+    volatile uint32_t _GPO;
+    volatile uint32_t _GPOS;
+    volatile uint32_t _GPOC;
+};
+#define _GPB (*(FASTLED_ESP_IO*)(0x60000000+(0x300)))
+
+// Info on reading cycle counter from https://github.com/kbeckmann/nodemcu-firmware/blob/ws2812-dual/app/modules/ws2812.c
+__attribute__ ((always_inline)) inline static uint32_t __clock_cycles() {
+    uint32_t cyc;
+    __asm__ __volatile__ ("rsr %0,ccount":"=a" (cyc));
+    return cyc;
 }
 
-static bool IRAM_ATTR ws2812_esp8266_send_raw(uint32_t mask, const uint8_t* pixels, size_t num_bytes,
-                                              uint32_t cycles_t0h, uint32_t cycles_t1h,
-                                              uint32_t cycles_period_wait, uint32_t max_bit_cycles) {
+template<int BITS, uint32_t T1, uint32_t T2, uint32_t T3>
+__attribute__ ((always_inline)) inline static bool writeBits(
+    uint32_t & last_mark,
+    uint32_t b,
+    uint32_t mask)
+{
+    b <<= 24; b = ~b;
+    for(uint32_t i = BITS; i > 0; --i) {
+        while((__clock_cycles() - last_mark) < (T1+T2+T3)) {
+            ;
+        }
+        last_mark = __clock_cycles();
+        _GPB._GPOS = mask;
+
+        while((__clock_cycles() - last_mark) < T1) {
+            ;
+        }
+        if(b & 0x80000000L) { _GPB._GPOC = mask; }
+        b <<= 1;
+
+        while((__clock_cycles() - last_mark) < (T1+T2)) {
+            ;
+        }
+        _GPB._GPOC = mask;
+
+        // even with interrupts disabled, the NMI interupt seems to cause
+        // timing issues here. abort the frame if one bit took to long. if the
+        // last of the 24 bits has been sent already, it is too late
+        // this fixes the flickering first pixel that started to occur with
+        // framework version 3.0.0
+        if ((__clock_cycles() - last_mark) >= (T1 + T2 + T3 - 5)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template<uint32_t T1, uint32_t T2, uint32_t T3>
+static uint32_t IRAM_ATTR showRGBInternal_esp8266_templated(
+    const uint8_t* pixels, uint16_t num_leds, uint32_t clks_per_us, uint32_t mask)
+{
     const uint8_t* p = pixels;
-    const uint8_t* end = pixels + num_bytes;
-    if (p >= end) return true;
+    uint32_t b = *p++;
+    uint32_t start;
 
-    uint8_t pix = *p++;
-    uint8_t bitmask = 0x80;
-    uint32_t t = (pix & bitmask) ? cycles_t1h : cycles_t0h;
-    uint32_t c;
+    struct InterruptLock {
+        InterruptLock()  { ets_intr_lock(); }
+        ~InterruptLock() { ets_intr_unlock(); }
+        void Unlock()    { ets_intr_unlock(); }
+        void Lock()      { ets_intr_lock(); }
+    };
 
-    uint32_t startTime = _get_ccount();
+    {
+        InterruptLock intlock;
+        start = __clock_cycles();
+        uint32_t last_mark = start;
 
-    while (true) {
-        // 1. Assert HIGH
-        GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, mask);
-        startTime = _get_ccount();
-
-        // 2. Wait out HIGH pulse duration
-        while (((c = _get_ccount()) - startTime) < t);
-
-        // 3. Assert LOW
-        GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, mask);
-
-        // 4. While LOW, prepare next bit/byte
-        if (!(bitmask >>= 1)) {
-            if (p >= end) {
-                // Last bit of last byte: wait out bit period and finish cleanly
-                while (((c = _get_ccount()) - startTime) < cycles_period_wait);
-                return true;
+        for (uint16_t i = 0; i < num_leds; i++) {
+            // Write first byte, read second byte
+            if (writeBits<8, T1, T2, T3>(last_mark, b, mask)) {
+                _GPB._GPOC = mask;
+                return 0;
             }
-            pix = *p++;
-            bitmask = 0x80;
-        }
-        t = (pix & bitmask) ? cycles_t1h : cycles_t0h;
+            b = *p++;
 
-        // 5. Wait for the remainder of the bit period
-        while (((c = _get_ccount()) - startTime) < cycles_period_wait);
+            // Write second byte, read third byte
+            if (writeBits<8, T1, T2, T3>(last_mark, b, mask)) {
+                _GPB._GPOC = mask;
+                return 0;
+            }
+            b = *p++;
 
-        // 6. Detect if an interrupt (NMI / Wi-Fi) stretched this bit past safety threshold
-        if ((c - startTime) > max_bit_cycles) {
-            GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, mask); // ensure pin remains LOW
-            return false; // Collision! Abort corrupted frame immediately
+            // Write third byte
+            if (writeBits<8, T1, T2, T3>(last_mark, b, mask)) {
+                _GPB._GPOC = mask;
+                return 0;
+            }
+
+            // Between pixels: momentarily allow interrupts for Wi-Fi stack
+            intlock.Unlock();
+            if (i + 1 < num_leds) {
+                b = *p++;
+            }
+            intlock.Lock();
+
+            // If interrupts took longer than 45 us, WS2812 may latch: abort and retry
+            if ((int32_t)(__clock_cycles() - last_mark) > 0) {
+                if ((int32_t)(__clock_cycles() - last_mark) > (int32_t)(T1 + T2 + T3 + (45 * clks_per_us))) {
+                    _GPB._GPOC = mask;
+                    return 0;
+                }
+            }
         }
+    }
+
+    return __clock_cycles() - start;
+}
+
+static uint32_t IRAM_ATTR showRGBInternal_esp8266(
+    const uint8_t* pixels, uint16_t num_leds, uint32_t mask)
+{
+    uint32_t f_cpu = (uint32_t)ESP.getCpuFreqMHz() * 1000000UL;
+    if (f_cpu >= 160000000L) {
+        // 160 MHz: FMUL=20 -> T1=40, T2=100, T3=60, clks_per_us=160
+        return showRGBInternal_esp8266_templated<40, 100, 60>(pixels, num_leds, 160, mask);
+    } else {
+        // 80 MHz: FMUL=10 -> T1=20, T2=50, T3=30, clks_per_us=80
+        return showRGBInternal_esp8266_templated<20, 50, 30>(pixels, num_leds, 80, mask);
     }
 }
 
@@ -340,20 +411,10 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
     if (num_leds == 0 || !leds) return;
 
     uint32_t mask = 1UL << pin;
-    uint32_t f_cpu = (uint32_t)ESP.getCpuFreqMHz() * 1000000UL;
-
-    bool is_160mhz = (f_cpu >= 160000000L);
-    uint32_t cycles_t0h         = is_160mhz ? 56  : 28;
-    uint32_t cycles_t1h         = is_160mhz ? 128 : 64;
-    uint32_t cycles_period_wait = is_160mhz ? 190 : 94;
-    uint32_t max_bit_cycles     = is_160mhz ? 480 : 240; // ~3.0 us timeout threshold
-
     size_t num_bytes = (size_t)num_leds * 3;
 
     // Buffer preparation:
-    // Format all pixels into contiguous RAM ahead of time.
-    // This eliminates scale8, switch(order), and memory lookups from the timing-critical loop.
-    static uint8_t s_local_buf[1024]; // 1 KB fast buffer supports up to 341 LEDs without heap allocation
+    static uint8_t s_local_buf[1024]; // 1 KB fast buffer supports up to 341 LEDs without allocation
     uint8_t* tx_buf = s_local_buf;
     bool allocated = false;
 
@@ -379,25 +440,10 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
         }
     }
 
-    // Transmission with collision detection & auto-retry:
-    // If background Wi-Fi NMI interrupts hit mid-frame, abort cleanly,
-    // wait 300 us for strip latch/reset, and re-transmit.
-    bool success = false;
-    for (uint8_t retry = 0; retry < 4; retry++) {
-        ESP.wdtFeed();
-        noInterrupts();
-        success = ws2812_esp8266_send_raw(mask, tx_buf, num_bytes,
-                                          cycles_t0h, cycles_t1h,
-                                          cycles_period_wait, max_bit_cycles);
-        interrupts();
-        ESP.wdtFeed();
-
-        if (success) {
-            break;
-        }
-
-        // An interrupt collision occurred: allow pending background Wi-Fi tasks to drain
-        // and ensure the strip receives a full reset pulse before retrying
+    // FastLED-identical retry loop with NMI & Wi-Fi collision abort
+    int cnt = 3;
+    while ((showRGBInternal_esp8266(tx_buf, num_leds, mask) == 0) && cnt--) {
+        _GPB._GPOC = mask;
         delayMicroseconds(300);
     }
 
