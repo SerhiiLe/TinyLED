@@ -222,14 +222,14 @@ static uint8_t calculate_power_scale(const CRGB* leds, uint16_t num_leds, uint8_
     uint32_t avail_mA = max_mA - idle_mA;
 
     uint32_t sum_mA_x255 = 0;
-    uint16_t scale_r = ((uint16_t)brightness * corr_r) / 255;
-    uint16_t scale_g = ((uint16_t)brightness * corr_g) / 255;
-    uint16_t scale_b = ((uint16_t)brightness * corr_b) / 255;
+    uint8_t scale_r = scale8(brightness, corr_r);
+    uint8_t scale_g = scale8(brightness, corr_g);
+    uint8_t scale_b = scale8(brightness, corr_b);
 
     for (uint16_t i = 0; i < num_leds; i++) {
-        uint8_t r = ((uint16_t)leds[i].r * scale_r) >> 8;
-        uint8_t g = ((uint16_t)leds[i].g * scale_g) >> 8;
-        uint8_t b = ((uint16_t)leds[i].b * scale_b) >> 8;
+        uint8_t r = scale8(leds[i].r, scale_r);
+        uint8_t g = scale8(leds[i].g, scale_g);
+        uint8_t b = scale8(leds[i].b, scale_b);
 
         // At 5V: R: 16 mA, G: 11 mA, B: 15 mA
         sum_mA_x255 += ((uint32_t)r * 16 + (uint32_t)g * 11 + (uint32_t)b * 15);
@@ -268,7 +268,7 @@ static inline void ws2812_mark_reset() {
 #if defined(ESP8266)
 
 static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_t num_leds,
-                                          uint16_t scale_r, uint16_t scale_g, uint16_t scale_b,
+                                          uint8_t scale_r, uint8_t scale_g, uint8_t scale_b,
                                           EOrder order) {
     if (num_leds == 0 || !leds) return;
 
@@ -283,9 +283,9 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
     noInterrupts();
 
     for (uint16_t i = 0; i < num_leds; i++) {
-        uint8_t r = ((uint16_t)leds[i].r * scale_r) >> 8;
-        uint8_t g = ((uint16_t)leds[i].g * scale_g) >> 8;
-        uint8_t b = ((uint16_t)leds[i].b * scale_b) >> 8;
+        uint8_t r = scale8(leds[i].r, scale_r);
+        uint8_t g = scale8(leds[i].g, scale_g);
+        uint8_t b = scale8(leds[i].b, scale_b);
 
         uint8_t c0, c1, c2;
         switch (order) {
@@ -333,9 +333,9 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
 
 struct RmtTxContext {
     const CRGB* leds;
-    uint16_t scale_r;
-    uint16_t scale_g;
-    uint16_t scale_b;
+    uint8_t scale_r;
+    uint8_t scale_g;
+    uint8_t scale_b;
     EOrder order;
 };
 
@@ -356,7 +356,9 @@ static size_t IRAM_ATTR ws2812_simple_encode_cb(const void *data, size_t data_si
                                                 size_t symbols_written, size_t symbols_free,
                                                 rmt_symbol_word_t *symbols, bool *done, void *arg) {
     (void)arg;
-    size_t total_symbols = data_size * 8;
+    size_t data_symbols = data_size * 8;
+    size_t total_symbols = data_symbols + 1; // +1 trailing reset symbol (50 us LOW)
+
     if (symbols_written >= total_symbols) {
         *done = true;
         return 0;
@@ -368,38 +370,46 @@ static size_t IRAM_ATTR ws2812_simple_encode_cb(const void *data, size_t data_si
     }
 
     const CRGB* leds = (const CRGB*)data;
-    // At 20 MHz (50 ns tick):
-    // Bit 0: 350 ns HIGH (7 ticks), 900 ns LOW (18 ticks)
-    // Bit 1: 800 ns HIGH (16 ticks), 450 ns LOW (9 ticks)
+
+    // At 10 MHz resolution (100 ns per tick):
+    // Bit 0: 300 ns HIGH (3 ticks), 900 ns LOW (9 ticks) -> 1.2 us
+    // Bit 1: 900 ns HIGH (9 ticks), 300 ns LOW (3 ticks) -> 1.2 us
+    // Reset: 50 us LOW (250 ticks + 250 ticks = 500 ticks = 50 us)
     rmt_symbol_word_t bit0;
-    bit0.duration0 = 7; bit0.level0 = 1; bit0.duration1 = 18; bit0.level1 = 0;
+    bit0.duration0 = 3; bit0.level0 = 1; bit0.duration1 = 9; bit0.level1 = 0;
     rmt_symbol_word_t bit1;
-    bit1.duration0 = 16; bit1.level0 = 1; bit1.duration1 = 9; bit1.level1 = 0;
+    bit1.duration0 = 9; bit1.level0 = 1; bit1.duration1 = 3; bit1.level1 = 0;
+    rmt_symbol_word_t reset_sym;
+    reset_sym.duration0 = 250; reset_sym.level0 = 0; reset_sym.duration1 = 250; reset_sym.level1 = 0;
 
     for (size_t i = 0; i < symbols_to_write; i++) {
         size_t current_sym = symbols_written + i;
-        size_t byte_idx = current_sym / 8;
-        size_t bit_idx = 7 - (current_sym % 8);
-        size_t pixel_idx = byte_idx / 3;
-        size_t channel_idx = byte_idx % 3;
+        if (current_sym < data_symbols) {
+            size_t byte_idx = current_sym / 8;
+            size_t bit_idx = 7 - (current_sym % 8);
+            size_t pixel_idx = byte_idx / 3;
+            size_t channel_idx = byte_idx % 3;
 
-        const CRGB& p = leds[pixel_idx];
-        uint8_t r = ((uint16_t)p.r * s_rmt_ctx.scale_r) >> 8;
-        uint8_t g = ((uint16_t)p.g * s_rmt_ctx.scale_g) >> 8;
-        uint8_t b = ((uint16_t)p.b * s_rmt_ctx.scale_b) >> 8;
+            const CRGB& p = leds[pixel_idx];
+            uint8_t r = scale8(p.r, s_rmt_ctx.scale_r);
+            uint8_t g = scale8(p.g, s_rmt_ctx.scale_g);
+            uint8_t b = scale8(p.b, s_rmt_ctx.scale_b);
 
-        uint8_t val;
-        switch (s_rmt_ctx.order) {
-            case RGB: val = (channel_idx == 0) ? r : (channel_idx == 1 ? g : b); break;
-            case RBG: val = (channel_idx == 0) ? r : (channel_idx == 1 ? b : g); break;
-            case BGR: val = (channel_idx == 0) ? b : (channel_idx == 1 ? g : r); break;
-            case BRG: val = (channel_idx == 0) ? b : (channel_idx == 1 ? r : g); break;
-            case GBR: val = (channel_idx == 0) ? g : (channel_idx == 1 ? b : r); break;
-            default:  // GRB
-                      val = (channel_idx == 0) ? g : (channel_idx == 1 ? r : b); break;
+            uint8_t val;
+            switch (s_rmt_ctx.order) {
+                case RGB: val = (channel_idx == 0) ? r : (channel_idx == 1 ? g : b); break;
+                case RBG: val = (channel_idx == 0) ? r : (channel_idx == 1 ? b : g); break;
+                case BGR: val = (channel_idx == 0) ? b : (channel_idx == 1 ? g : r); break;
+                case BRG: val = (channel_idx == 0) ? b : (channel_idx == 1 ? r : g); break;
+                case GBR: val = (channel_idx == 0) ? g : (channel_idx == 1 ? b : r); break;
+                default:  // GRB
+                          val = (channel_idx == 0) ? g : (channel_idx == 1 ? r : b); break;
+            }
+
+            symbols[i] = (val & (1 << bit_idx)) ? bit1 : bit0;
+        } else {
+            symbols[i] = reset_sym;
         }
-
-        symbols[i] = (val & (1 << bit_idx)) ? bit1 : bit0;
     }
 
     *done = ((symbols_written + symbols_to_write) >= total_symbols);
@@ -422,8 +432,14 @@ static void ws2812_rmt_init(uint8_t pin) {
     rmt_tx_channel_config_t tx_chan_config = {};
     tx_chan_config.clk_src = RMT_CLK_SRC_DEFAULT;
     tx_chan_config.gpio_num = (gpio_num_t)pin;
+#if defined(SOC_RMT_MEM_WORDS_PER_CHANNEL)
+    tx_chan_config.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
+#elif defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ESP32C3)
+    tx_chan_config.mem_block_symbols = 48;
+#else
     tx_chan_config.mem_block_symbols = 64;
-    tx_chan_config.resolution_hz = 20000000; // 20 MHz (50 ns tick)
+#endif
+    tx_chan_config.resolution_hz = 10000000; // 10 MHz (100 ns tick)
     tx_chan_config.trans_queue_depth = 4;
     tx_chan_config.flags.invert_out = 0;
     tx_chan_config.flags.with_dma = 0;
@@ -432,7 +448,7 @@ static void ws2812_rmt_init(uint8_t pin) {
         rmt_simple_encoder_config_t enc_config = {};
         enc_config.callback = ws2812_simple_encode_cb;
         enc_config.arg = NULL;
-        enc_config.min_chunk_size = 64;
+        enc_config.min_chunk_size = 0; // Allow any small chunk refill
 
         if (rmt_new_simple_encoder(&enc_config, &s_simple_encoder) == ESP_OK &&
             rmt_enable(s_tx_channel) == ESP_OK) {
@@ -442,7 +458,7 @@ static void ws2812_rmt_init(uint8_t pin) {
 }
 
 static void ws2812_rmt_send(const CRGB* leds, uint16_t num_leds,
-                            uint16_t scale_r, uint16_t scale_g, uint16_t scale_b,
+                            uint8_t scale_r, uint8_t scale_g, uint8_t scale_b,
                             EOrder order) {
     if (!s_tx_channel || !s_simple_encoder) return;
 
@@ -489,9 +505,9 @@ static void IRAM_ATTR ws2812_rmt_adapter(const void *src, rmt_item32_t *dest, si
         size_t channel_idx = byte_offset % 3;
 
         const CRGB& p = s_rmt_ctx.leds[pixel_idx];
-        uint8_t r = ((uint16_t)p.r * s_rmt_ctx.scale_r) >> 8;
-        uint8_t g = ((uint16_t)p.g * s_rmt_ctx.scale_g) >> 8;
-        uint8_t b = ((uint16_t)p.b * s_rmt_ctx.scale_b) >> 8;
+        uint8_t r = scale8(p.r, s_rmt_ctx.scale_r);
+        uint8_t g = scale8(p.g, s_rmt_ctx.scale_g);
+        uint8_t b = scale8(p.b, s_rmt_ctx.scale_b);
 
         uint8_t c0, c1, c2;
         switch (s_rmt_ctx.order) {
@@ -552,7 +568,7 @@ static void ws2812_rmt_init(uint8_t pin) {
 }
 
 static void ws2812_rmt_send(const CRGB* leds, uint16_t num_leds,
-                            uint16_t scale_r, uint16_t scale_g, uint16_t scale_b,
+                            uint8_t scale_r, uint8_t scale_g, uint8_t scale_b,
                             EOrder order) {
     s_rmt_ctx.leds = leds;
     s_rmt_ctx.scale_r = scale_r;
@@ -585,10 +601,10 @@ void TinyLEDController::init(uint8_t pin, uint16_t num_leds, CRGB* leds, EOrder 
     m_leds = leds;
     m_order = order;
 
+#if defined(ESP8266)
     pinMode(m_pin, OUTPUT);
     digitalWrite(m_pin, LOW);
-
-#if defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
+#elif defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
     ws2812_rmt_init(m_pin);
 #endif
 
@@ -630,6 +646,10 @@ void TinyLEDController::clearData() {
 void TinyLEDController::show() {
     if (!m_initialized || !m_leds || m_num_leds == 0) return;
 
+#if defined(ESP32) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32C3)
+    ws2812_rmt_init(m_pin);
+#endif
+
     ws2812_wait_reset();
 
     uint8_t effective_brightness = m_brightness;
@@ -639,9 +659,9 @@ void TinyLEDController::show() {
                                                      m_max_power_mA);
     }
 
-    uint16_t scale_r = ((uint16_t)effective_brightness * m_correction.r) / 255;
-    uint16_t scale_g = ((uint16_t)effective_brightness * m_correction.g) / 255;
-    uint16_t scale_b = ((uint16_t)effective_brightness * m_correction.b) / 255;
+    uint8_t scale_r = scale8(effective_brightness, m_correction.r);
+    uint8_t scale_g = scale8(effective_brightness, m_correction.g);
+    uint8_t scale_b = scale8(effective_brightness, m_correction.b);
 
 #if defined(ESP8266)
     ws2812_esp8266_send(m_pin, m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);

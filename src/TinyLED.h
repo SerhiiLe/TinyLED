@@ -218,6 +218,12 @@ struct __attribute__((packed)) CRGB {
     inline explicit operator bool() const {
         return (r | g | b) != 0;
     }
+    inline explicit operator uint32_t() const {
+        return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    }
+    inline uint32_t as_uint32_t() const {
+        return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    }
 
     inline CRGB& operator+=(const CRGB& rhs) {
         r = qadd8(r, rhs.r);
@@ -564,10 +570,10 @@ typedef TinyLEDController WS2812Controller;
 // TinyLED Template API (Section 5 of TZ)
 // ============================================================================
 
-template<uint8_t PIN, uint16_t NUM_LEDS, EOrder ORDER = GRB>
+template<uint8_t _PIN, uint16_t _NUM_LEDS, EOrder _ORDER = GRB>
 class TinyLED {
 private:
-    CRGB m_internal_buffer[NUM_LEDS];
+    CRGB m_internal_buffer[_NUM_LEDS];
     CRGB* m_current_buffer;
     TinyLEDController m_controller;
 
@@ -575,12 +581,12 @@ public:
     // Default constructor: uses internal buffer
     TinyLED()
         : m_current_buffer(m_internal_buffer),
-          m_controller(PIN, NUM_LEDS, m_internal_buffer, ORDER) {}
+          m_controller(_PIN, _NUM_LEDS, m_internal_buffer, _ORDER) {}
 
     // Constructor with external buffer
     TinyLED(CRGB* external_buffer)
         : m_current_buffer(external_buffer ? external_buffer : m_internal_buffer),
-          m_controller(PIN, NUM_LEDS, external_buffer ? external_buffer : m_internal_buffer, ORDER) {}
+          m_controller(_PIN, _NUM_LEDS, external_buffer ? external_buffer : m_internal_buffer, _ORDER) {}
 
     inline TinyLEDController& setCorrection(uint32_t corr) { return m_controller.setCorrection(corr); }
     inline TinyLEDController& setCorrection(const CRGB& corr) { return m_controller.setCorrection(corr); }
@@ -603,7 +609,7 @@ public:
     inline CRGB& operator[](int index) { return m_current_buffer[index]; }
     inline const CRGB& operator[](int index) const { return m_current_buffer[index]; }
     inline CRGB* leds() { return m_current_buffer; }
-    inline uint16_t size() const { return NUM_LEDS; }
+    inline uint16_t size() const { return _NUM_LEDS; }
     inline TinyLEDController& controller() { return m_controller; }
 };
 
@@ -618,17 +624,17 @@ private:
 public:
     CFastLED() : m_primaryController(nullptr) {}
 
-    template<typename CHIPSET, uint8_t DATA_PIN, EOrder RGB_ORDER>
+    template<typename CHIPSET, uint8_t _DATA_PIN, EOrder _RGB_ORDER>
     TinyLEDController& addLeds(CRGB* data, uint16_t nLedsOrOffset) {
-        static TinyLEDController controller(DATA_PIN, nLedsOrOffset, data, RGB_ORDER);
-        controller.init(DATA_PIN, nLedsOrOffset, data, RGB_ORDER);
+        static TinyLEDController controller(_DATA_PIN, nLedsOrOffset, data, _RGB_ORDER);
+        controller.init(_DATA_PIN, nLedsOrOffset, data, _RGB_ORDER);
         m_primaryController = &controller;
         return controller;
     }
 
-    template<typename CHIPSET, uint8_t DATA_PIN>
+    template<typename CHIPSET, uint8_t _DATA_PIN>
     TinyLEDController& addLeds(CRGB* data, uint16_t nLedsOrOffset) {
-        return addLeds<CHIPSET, DATA_PIN, GRB>(data, nLedsOrOffset);
+        return addLeds<CHIPSET, _DATA_PIN, GRB>(data, nLedsOrOffset);
     }
 
     void show() {
