@@ -290,7 +290,8 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
 
     uint32_t cycles_t0h = (f_cpu >= 160000000L) ? 56 : 28;
     uint32_t cycles_t1h = (f_cpu >= 160000000L) ? 128 : 64;
-    uint32_t cycles_period = (f_cpu >= 160000000L) ? 200 : 100;
+    // Compensate for loop branching overhead to keep true 1.25 us bit period
+    uint32_t cycles_period = (f_cpu >= 160000000L) ? 176 : 88;
 
     ESP.wdtFeed();
     noInterrupts();
@@ -300,18 +301,15 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
         uint8_t g = scale8(leds[i].g, scale_g);
         uint8_t b = scale8(leds[i].b, scale_b);
 
-        uint8_t c0, c1, c2;
+        uint8_t bytes[3];
         switch (order) {
-            case RGB: c0 = r; c1 = g; c2 = b; break;
-            case RBG: c0 = r; c1 = b; c2 = g; break;
-            case BGR: c0 = b; c1 = g; c2 = r; break;
-            case BRG: c0 = b; c1 = r; c2 = g; break;
-            case GBR: c0 = g; c1 = b; c2 = r; break;
-            default:  // GRB (WS2812B standard)
-                      c0 = g; c1 = r; c2 = b; break;
+            case RGB: bytes[0] = r; bytes[1] = g; bytes[2] = b; break;
+            case RBG: bytes[0] = r; bytes[1] = b; bytes[2] = g; break;
+            case BGR: bytes[0] = b; bytes[1] = g; bytes[2] = r; break;
+            case BRG: bytes[0] = b; bytes[1] = r; bytes[2] = g; break;
+            case GBR: bytes[0] = g; bytes[1] = b; bytes[2] = r; break;
+            default:  bytes[0] = g; bytes[1] = r; bytes[2] = b; break; // GRB
         }
-
-        uint8_t bytes[3] = { c0, c1, c2 };
 
         for (uint8_t byte_idx = 0; byte_idx < 3; byte_idx++) {
             uint8_t byte_val = bytes[byte_idx];
@@ -338,6 +336,7 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
     }
 
     interrupts();
+    ESP.wdtFeed();
 }
 
 #elif defined(_TINYLED_PLATFORM_ESP32)
@@ -365,12 +364,28 @@ static rmt_channel_handle_t s_tx_channel = NULL;
 static rmt_encoder_handle_t s_simple_encoder = NULL;
 static uint8_t s_installed_pin = 255;
 
+static inline uint8_t IRAM_ATTR get_channel_byte(const CRGB* leds, size_t pixel_idx, size_t channel_idx) {
+    const CRGB& p = leds[pixel_idx];
+    uint8_t r = scale8(p.r, s_rmt_ctx.scale_r);
+    uint8_t g = scale8(p.g, s_rmt_ctx.scale_g);
+    uint8_t b = scale8(p.b, s_rmt_ctx.scale_b);
+
+    switch (s_rmt_ctx.order) {
+        case RGB: return (channel_idx == 0) ? r : (channel_idx == 1 ? g : b);
+        case RBG: return (channel_idx == 0) ? r : (channel_idx == 1 ? b : g);
+        case BGR: return (channel_idx == 0) ? b : (channel_idx == 1 ? g : r);
+        case BRG: return (channel_idx == 0) ? b : (channel_idx == 1 ? r : g);
+        case GBR: return (channel_idx == 0) ? g : (channel_idx == 1 ? b : r);
+        default:  return (channel_idx == 0) ? g : (channel_idx == 1 ? r : b); // GRB
+    }
+}
+
 static size_t IRAM_ATTR ws2812_simple_encode_cb(const void *data, size_t data_size,
                                                 size_t symbols_written, size_t symbols_free,
                                                 rmt_symbol_word_t *symbols, bool *done, void *arg) {
     (void)arg;
     size_t data_symbols = data_size * 8;
-    size_t total_symbols = data_symbols + 1; // +1 trailing reset symbol (50 us LOW)
+    size_t total_symbols = data_symbols + 1; // +1 trailing reset symbol (300 us LOW)
 
     if (symbols_written >= total_symbols) {
         *done = true;
@@ -387,39 +402,38 @@ static size_t IRAM_ATTR ws2812_simple_encode_cb(const void *data, size_t data_si
     // At 10 MHz resolution (100 ns per tick):
     // Bit 0: 300 ns HIGH (3 ticks), 900 ns LOW (9 ticks) -> 1.2 us
     // Bit 1: 900 ns HIGH (9 ticks), 300 ns LOW (3 ticks) -> 1.2 us
-    // Reset: 50 us LOW (250 ticks + 250 ticks = 500 ticks = 50 us)
+    // Reset: 300 us LOW (1500 ticks + 1500 ticks = 3000 ticks = 300 us)
     rmt_symbol_word_t bit0;
     bit0.duration0 = 3; bit0.level0 = 1; bit0.duration1 = 9; bit0.level1 = 0;
     rmt_symbol_word_t bit1;
     bit1.duration0 = 9; bit1.level0 = 1; bit1.duration1 = 3; bit1.level1 = 0;
     rmt_symbol_word_t reset_sym;
-    reset_sym.duration0 = 250; reset_sym.level0 = 0; reset_sym.duration1 = 250; reset_sym.level1 = 0;
+    reset_sym.duration0 = 1500; reset_sym.level0 = 0; reset_sym.duration1 = 1500; reset_sym.level1 = 0;
 
-    for (size_t i = 0; i < symbols_to_write; i++) {
-        size_t current_sym = symbols_written + i;
+    size_t current_sym = symbols_written;
+    size_t byte_idx = current_sym >> 3;
+    size_t bit_idx = current_sym & 7;
+    size_t pixel_idx = byte_idx / 3;
+    size_t channel_idx = byte_idx % 3;
+
+    uint8_t cur_byte_val = 0;
+    if (current_sym < data_symbols) {
+        cur_byte_val = get_channel_byte(leds, pixel_idx, channel_idx);
+    }
+
+    for (size_t i = 0; i < symbols_to_write; i++, current_sym++) {
         if (current_sym < data_symbols) {
-            size_t byte_idx = current_sym / 8;
-            size_t bit_idx = 7 - (current_sym % 8);
-            size_t pixel_idx = byte_idx / 3;
-            size_t channel_idx = byte_idx % 3;
-
-            const CRGB& p = leds[pixel_idx];
-            uint8_t r = scale8(p.r, s_rmt_ctx.scale_r);
-            uint8_t g = scale8(p.g, s_rmt_ctx.scale_g);
-            uint8_t b = scale8(p.b, s_rmt_ctx.scale_b);
-
-            uint8_t val;
-            switch (s_rmt_ctx.order) {
-                case RGB: val = (channel_idx == 0) ? r : (channel_idx == 1 ? g : b); break;
-                case RBG: val = (channel_idx == 0) ? r : (channel_idx == 1 ? b : g); break;
-                case BGR: val = (channel_idx == 0) ? b : (channel_idx == 1 ? g : r); break;
-                case BRG: val = (channel_idx == 0) ? b : (channel_idx == 1 ? r : g); break;
-                case GBR: val = (channel_idx == 0) ? g : (channel_idx == 1 ? b : r); break;
-                default:  // GRB
-                          val = (channel_idx == 0) ? g : (channel_idx == 1 ? r : b); break;
+            symbols[i] = (cur_byte_val & (0x80 >> bit_idx)) ? bit1 : bit0;
+            if (++bit_idx == 8) {
+                bit_idx = 0;
+                if (++channel_idx == 3) {
+                    channel_idx = 0;
+                    pixel_idx++;
+                }
+                if (current_sym + 1 < data_symbols) {
+                    cur_byte_val = get_channel_byte(leds, pixel_idx, channel_idx);
+                }
             }
-
-            symbols[i] = (val & (1 << bit_idx)) ? bit1 : bit0;
         } else {
             symbols[i] = reset_sym;
         }
@@ -445,15 +459,16 @@ static void ws2812_rmt_init(uint8_t pin) {
     rmt_tx_channel_config_t tx_chan_config = {};
     tx_chan_config.clk_src = RMT_CLK_SRC_DEFAULT;
     tx_chan_config.gpio_num = (gpio_num_t)pin;
-#if defined(SOC_RMT_MEM_WORDS_PER_CHANNEL)
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ESP32C3)
+    tx_chan_config.mem_block_symbols = 96; // Double FIFO depth on ESP32-C3 for Wi-Fi safety
+#elif defined(SOC_RMT_MEM_WORDS_PER_CHANNEL)
     tx_chan_config.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
-#elif defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ESP32C3)
-    tx_chan_config.mem_block_symbols = 48;
 #else
     tx_chan_config.mem_block_symbols = 64;
 #endif
     tx_chan_config.resolution_hz = 10000000; // 10 MHz (100 ns tick)
     tx_chan_config.trans_queue_depth = 4;
+    tx_chan_config.intr_priority = 3; // High priority interrupt to prevent Wi-Fi starvation
     tx_chan_config.flags.invert_out = 0;
     tx_chan_config.flags.with_dma = 0;
 

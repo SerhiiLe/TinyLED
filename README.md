@@ -273,4 +273,4 @@ void loop() {
 
 Библиотека распространяется под лицензией **GNU Lesser General Public License v3.0 (LGPL-3.0-or-later)**. Подробный текст лицензии см. в файле [LICENSE](LICENSE).
 
-Автор: **SerhiiLe** (<https://github.com/SerhiiLe>)
+Автор: **Serhii Lebedenko** (<https://github.com/SerhiiLe>)
