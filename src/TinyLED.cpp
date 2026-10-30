@@ -280,6 +280,60 @@ static inline void ws2812_mark_reset() {
 
 #if defined(_TINYLED_PLATFORM_ESP8266)
 
+static inline uint32_t IRAM_ATTR _get_ccount(void) {
+    uint32_t r;
+    __asm__ __volatile__("rsr %0, ccount" : "=a"(r));
+    return r;
+}
+
+static bool IRAM_ATTR ws2812_esp8266_send_raw(uint32_t mask, const uint8_t* pixels, size_t num_bytes,
+                                              uint32_t cycles_t0h, uint32_t cycles_t1h,
+                                              uint32_t cycles_period_wait, uint32_t max_bit_cycles) {
+    const uint8_t* p = pixels;
+    const uint8_t* end = pixels + num_bytes;
+    if (p >= end) return true;
+
+    uint8_t pix = *p++;
+    uint8_t bitmask = 0x80;
+    uint32_t t = (pix & bitmask) ? cycles_t1h : cycles_t0h;
+    uint32_t c;
+
+    uint32_t startTime = _get_ccount();
+
+    while (true) {
+        // 1. Assert HIGH
+        GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, mask);
+        startTime = _get_ccount();
+
+        // 2. Wait out HIGH pulse duration
+        while (((c = _get_ccount()) - startTime) < t);
+
+        // 3. Assert LOW
+        GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, mask);
+
+        // 4. While LOW, prepare next bit/byte
+        if (!(bitmask >>= 1)) {
+            if (p >= end) {
+                // Last bit of last byte: wait out bit period and finish cleanly
+                while (((c = _get_ccount()) - startTime) < cycles_period_wait);
+                return true;
+            }
+            pix = *p++;
+            bitmask = 0x80;
+        }
+        t = (pix & bitmask) ? cycles_t1h : cycles_t0h;
+
+        // 5. Wait for the remainder of the bit period
+        while (((c = _get_ccount()) - startTime) < cycles_period_wait);
+
+        // 6. Detect if an interrupt (NMI / Wi-Fi) stretched this bit past safety threshold
+        if ((c - startTime) > max_bit_cycles) {
+            GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, mask); // ensure pin remains LOW
+            return false; // Collision! Abort corrupted frame immediately
+        }
+    }
+}
+
 static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_t num_leds,
                                           uint8_t scale_r, uint8_t scale_g, uint8_t scale_b,
                                           EOrder order) {
@@ -288,55 +342,68 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
     uint32_t mask = 1UL << pin;
     uint32_t f_cpu = (uint32_t)ESP.getCpuFreqMHz() * 1000000UL;
 
-    uint32_t cycles_t0h = (f_cpu >= 160000000L) ? 56 : 28;
-    uint32_t cycles_t1h = (f_cpu >= 160000000L) ? 128 : 64;
-    // Compensate for loop branching overhead to keep true 1.25 us bit period
-    uint32_t cycles_period = (f_cpu >= 160000000L) ? 176 : 88;
+    bool is_160mhz = (f_cpu >= 160000000L);
+    uint32_t cycles_t0h         = is_160mhz ? 56  : 28;
+    uint32_t cycles_t1h         = is_160mhz ? 128 : 64;
+    uint32_t cycles_period_wait = is_160mhz ? 190 : 94;
+    uint32_t max_bit_cycles     = is_160mhz ? 480 : 240; // ~3.0 us timeout threshold
 
-    ESP.wdtFeed();
-    noInterrupts();
+    size_t num_bytes = (size_t)num_leds * 3;
 
+    // Buffer preparation:
+    // Format all pixels into contiguous RAM ahead of time.
+    // This eliminates scale8, switch(order), and memory lookups from the timing-critical loop.
+    static uint8_t s_local_buf[1024]; // 1 KB fast buffer supports up to 341 LEDs without heap allocation
+    uint8_t* tx_buf = s_local_buf;
+    bool allocated = false;
+
+    if (num_bytes > sizeof(s_local_buf)) {
+        tx_buf = (uint8_t*)malloc(num_bytes);
+        if (!tx_buf) return;
+        allocated = true;
+    }
+
+    uint8_t* dst = tx_buf;
     for (uint16_t i = 0; i < num_leds; i++) {
         uint8_t r = scale8(leds[i].r, scale_r);
         uint8_t g = scale8(leds[i].g, scale_g);
         uint8_t b = scale8(leds[i].b, scale_b);
 
-        uint8_t bytes[3];
         switch (order) {
-            case RGB: bytes[0] = r; bytes[1] = g; bytes[2] = b; break;
-            case RBG: bytes[0] = r; bytes[1] = b; bytes[2] = g; break;
-            case BGR: bytes[0] = b; bytes[1] = g; bytes[2] = r; break;
-            case BRG: bytes[0] = b; bytes[1] = r; bytes[2] = g; break;
-            case GBR: bytes[0] = g; bytes[1] = b; bytes[2] = r; break;
-            default:  bytes[0] = g; bytes[1] = r; bytes[2] = b; break; // GRB
-        }
-
-        for (uint8_t byte_idx = 0; byte_idx < 3; byte_idx++) {
-            uint8_t byte_val = bytes[byte_idx];
-            for (uint8_t bit = 0; bit < 8; bit++) {
-                uint32_t width = (byte_val & 0x80) ? cycles_t1h : cycles_t0h;
-                byte_val <<= 1;
-
-                uint32_t start;
-                __asm__ __volatile__("rsr %0, ccount" : "=a"(start));
-                GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, mask);
-
-                uint32_t now;
-                do {
-                    __asm__ __volatile__("rsr %0, ccount" : "=a"(now));
-                } while ((now - start) < width);
-
-                GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, mask);
-
-                do {
-                    __asm__ __volatile__("rsr %0, ccount" : "=a"(now));
-                } while ((now - start) < cycles_period);
-            }
+            case RGB: *dst++ = r; *dst++ = g; *dst++ = b; break;
+            case RBG: *dst++ = r; *dst++ = b; *dst++ = g; break;
+            case BGR: *dst++ = b; *dst++ = g; *dst++ = r; break;
+            case BRG: *dst++ = b; *dst++ = r; *dst++ = g; break;
+            case GBR: *dst++ = g; *dst++ = b; *dst++ = r; break;
+            default:  *dst++ = g; *dst++ = r; *dst++ = b; break; // GRB
         }
     }
 
-    interrupts();
-    ESP.wdtFeed();
+    // Transmission with collision detection & auto-retry:
+    // If background Wi-Fi NMI interrupts hit mid-frame, abort cleanly,
+    // wait 300 us for strip latch/reset, and re-transmit.
+    bool success = false;
+    for (uint8_t retry = 0; retry < 4; retry++) {
+        ESP.wdtFeed();
+        noInterrupts();
+        success = ws2812_esp8266_send_raw(mask, tx_buf, num_bytes,
+                                          cycles_t0h, cycles_t1h,
+                                          cycles_period_wait, max_bit_cycles);
+        interrupts();
+        ESP.wdtFeed();
+
+        if (success) {
+            break;
+        }
+
+        // An interrupt collision occurred: allow pending background Wi-Fi tasks to drain
+        // and ensure the strip receives a full reset pulse before retrying
+        delayMicroseconds(300);
+    }
+
+    if (allocated) {
+        free(tx_buf);
+    }
 }
 
 #elif defined(_TINYLED_PLATFORM_ESP32)
@@ -752,6 +819,8 @@ void TinyLEDController::init(uint8_t pin, uint16_t num_leds, CRGB* leds, EOrder 
 #if defined(_TINYLED_PLATFORM_ESP8266)
     pinMode(m_pin, OUTPUT);
     digitalWrite(m_pin, LOW);
+    ws2812_mark_reset();
+    delayMicroseconds(300);
 #elif defined(_TINYLED_PLATFORM_ESP32)
     ws2812_rmt_init(m_pin);
 #elif defined(_TINYLED_PLATFORM_RP2040)
