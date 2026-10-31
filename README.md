@@ -53,7 +53,7 @@ Designed as a **drop-in replacement** for FastLED in smart clock, scrolling text
 [env:my_project]
 framework = arduino
 lib_deps =
-    SerhiiLe/TinyLED
+    slebedenko/TinyLED
 ```
 Или напрямую из Git-репозитория:
 ```ini

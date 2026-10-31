@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/SerhiiLe/TinyLED/releases"><img src="https://img.shields.io/github/v/release/SerhiiLe/TinyLED?include_prereleases&color=blue" alt="Latest Release"></a>
-  <a href="https://registry.platformio.org/libraries/serhiile/TinyLED"><img src="https://badges.registry.platformio.org/packages/serhiile/library/TinyLED.svg" alt="PlatformIO Registry"></a>
+  <a href="https://registry.platformio.org/libraries/slebedenko/TinyLED"><img src="https://badges.registry.platformio.org/packages/slebedenko/library/TinyLED.svg" alt="PlatformIO Registry"></a>
   <a href="https://www.arduino.cc/reference/en/libraries/tinyled/"><img src="https://img.shields.io/badge/Arduino-TinyLED-00979C.svg?logo=arduino" alt="Arduino Library"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-LGPL_v3-green.svg" alt="License: LGPL v3"></a>
 </p>
@@ -46,7 +46,7 @@ Add the library to your `platformio.ini`:
 [env:my_project]
 framework = arduino
 lib_deps =
-    SerhiiLe/TinyLED
+    slebedenko/TinyLED
 ```
 Or directly from the Git repository:
 ```ini
@@ -266,5 +266,5 @@ The `TinyLED` class also allows redirecting output to an external buffer at runt
 
 This library is licensed under the **GNU Lesser General Public License v3.0 (LGPL-3.0-or-later)**. See the [LICENSE](LICENSE) file for complete terms.
 
-Author: **SerhiiLe** (<https://github.com/SerhiiLe>)
+Author: **Serhii Lebedenko** (<https://github.com/SerhiiLe>)
 
