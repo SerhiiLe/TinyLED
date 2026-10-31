@@ -575,8 +575,10 @@ static void ws2812_rmt_init(uint8_t pin) {
     rmt_tx_channel_config_t tx_chan_config = {};
     tx_chan_config.clk_src = RMT_CLK_SRC_DEFAULT;
     tx_chan_config.gpio_num = (gpio_num_t)pin;
-#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ESP32C3)
-    tx_chan_config.mem_block_symbols = 96; // Double FIFO depth on ESP32-C3 for Wi-Fi safety
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ESP32C3) || \
+    defined(CONFIG_IDF_TARGET_ESP32C6) || defined(ESP32C6) || \
+    defined(CONFIG_IDF_TARGET_ESP32H2) || defined(ESP32H2)
+    tx_chan_config.mem_block_symbols = 96; // Double FIFO depth on single-core chips for Wi-Fi safety
 #elif defined(SOC_RMT_MEM_WORDS_PER_CHANNEL)
     tx_chan_config.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
 #else
@@ -696,15 +698,26 @@ static void ws2812_rmt_init(uint8_t pin) {
     config.rmt_mode = RMT_MODE_TX;
     config.channel = RMT_CHANNEL_0;
     config.gpio_num = (gpio_num_t)pin;
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ESP32C3) || \
+    defined(CONFIG_IDF_TARGET_ESP32C6) || defined(ESP32C6) || \
+    defined(CONFIG_IDF_TARGET_ESP32H2) || defined(ESP32H2)
+    config.mem_block_num = 2; // 2 blocks on single-core chips
+#else
     config.mem_block_num = 1;
+#endif
     config.clk_div = 2; // 80 MHz / 2 = 40 MHz -> 25 ns/tick
     config.tx_config.loop_en = false;
     config.tx_config.carrier_en = false;
     config.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
     config.tx_config.idle_output_en = true;
 
+    int intr_flags = 0;
+#if defined(ESP_INTR_FLAG_LEVEL3)
+    intr_flags = ESP_INTR_FLAG_LEVEL3;
+#endif
+
     if (rmt_config(&config) == ESP_OK &&
-        rmt_driver_install(config.channel, 0, 0) == ESP_OK &&
+        rmt_driver_install(config.channel, 0, intr_flags) == ESP_OK &&
         rmt_translator_init(config.channel, ws2812_rmt_adapter) == ESP_OK) {
         s_rmt_installed = true;
         s_installed_pin = pin;
