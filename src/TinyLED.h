@@ -256,6 +256,12 @@ struct __attribute__((packed)) CRGB {
         b = scale8(b, scale);
         return *this;
     }
+    inline CRGB& nscale8_video(uint8_t scale) {
+        r = scale8_video(r, scale);
+        g = scale8_video(g, scale);
+        b = scale8_video(b, scale);
+        return *this;
+    }
     inline CRGB& fadeToBlackBy(uint8_t step) {
         return nscale8(255 - step);
     }

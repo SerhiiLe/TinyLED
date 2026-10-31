@@ -199,9 +199,9 @@ CRGB ColorFromPalette(const CRGBPalette16& pal, uint8_t index, uint8_t brightnes
     }
 
     if (brightness < 255) {
-        r = scale8(r, brightness);
-        g = scale8(g, brightness);
-        b = scale8(b, brightness);
+        r = scale8_video(r, brightness);
+        g = scale8_video(g, brightness);
+        b = scale8_video(b, brightness);
     }
 
     return CRGB(r, g, b);
@@ -214,22 +214,22 @@ CRGB ColorFromPalette(const CRGBPalette16& pal, uint8_t index, uint8_t brightnes
 static uint8_t calculate_power_scale(const CRGB* leds, uint16_t num_leds, uint8_t brightness,
                                      uint8_t corr_r, uint8_t corr_g, uint8_t corr_b,
                                      uint32_t max_mA) {
-    if (max_mA == 0 || num_leds == 0) return brightness;
+    if (brightness == 0 || max_mA == 0 || num_leds == 0 || !leds) return brightness;
 
     uint32_t idle_mA = (uint32_t)num_leds * 1; // ~1 mA quiescent per LED
-    if (idle_mA >= max_mA) return 0;
+    if (idle_mA >= max_mA) return (brightness > 0) ? 1 : 0;
 
     uint32_t avail_mA = max_mA - idle_mA;
 
     uint32_t sum_mA_x255 = 0;
-    uint8_t scale_r = scale8(brightness, corr_r);
-    uint8_t scale_g = scale8(brightness, corr_g);
-    uint8_t scale_b = scale8(brightness, corr_b);
+    uint8_t scale_r = scale8_video(brightness, corr_r);
+    uint8_t scale_g = scale8_video(brightness, corr_g);
+    uint8_t scale_b = scale8_video(brightness, corr_b);
 
     for (uint16_t i = 0; i < num_leds; i++) {
-        uint8_t r = scale8(leds[i].r, scale_r);
-        uint8_t g = scale8(leds[i].g, scale_g);
-        uint8_t b = scale8(leds[i].b, scale_b);
+        uint8_t r = scale8_video(leds[i].r, scale_r);
+        uint8_t g = scale8_video(leds[i].g, scale_g);
+        uint8_t b = scale8_video(leds[i].b, scale_b);
 
         // At 5V: R: 16 mA, G: 11 mA, B: 15 mA
         sum_mA_x255 += ((uint32_t)r * 16 + (uint32_t)g * 11 + (uint32_t)b * 15);
@@ -241,6 +241,9 @@ static uint8_t calculate_power_scale(const CRGB* leds, uint16_t num_leds, uint8_
     }
 
     uint32_t adjusted = ((uint32_t)brightness * avail_mA) / leds_mA;
+    if (adjusted == 0 && brightness > 0) {
+        adjusted = 1;
+    }
     return (uint8_t)(adjusted > 255 ? 255 : adjusted);
 }
 
@@ -426,9 +429,9 @@ static void IRAM_ATTR ws2812_esp8266_send(uint8_t pin, const CRGB* leds, uint16_
 
     uint8_t* dst = tx_buf;
     for (uint16_t i = 0; i < num_leds; i++) {
-        uint8_t r = scale8(leds[i].r, scale_r);
-        uint8_t g = scale8(leds[i].g, scale_g);
-        uint8_t b = scale8(leds[i].b, scale_b);
+        uint8_t r = scale8_video(leds[i].r, scale_r);
+        uint8_t g = scale8_video(leds[i].g, scale_g);
+        uint8_t b = scale8_video(leds[i].b, scale_b);
 
         switch (order) {
             case RGB: *dst++ = r; *dst++ = g; *dst++ = b; break;
@@ -479,9 +482,9 @@ static uint8_t s_installed_pin = 255;
 
 static inline uint8_t IRAM_ATTR get_channel_byte(const CRGB* leds, size_t pixel_idx, size_t channel_idx) {
     const CRGB& p = leds[pixel_idx];
-    uint8_t r = scale8(p.r, s_rmt_ctx.scale_r);
-    uint8_t g = scale8(p.g, s_rmt_ctx.scale_g);
-    uint8_t b = scale8(p.b, s_rmt_ctx.scale_b);
+    uint8_t r = scale8_video(p.r, s_rmt_ctx.scale_r);
+    uint8_t g = scale8_video(p.g, s_rmt_ctx.scale_g);
+    uint8_t b = scale8_video(p.b, s_rmt_ctx.scale_b);
 
     switch (s_rmt_ctx.order) {
         case RGB: return (channel_idx == 0) ? r : (channel_idx == 1 ? g : b);
@@ -646,9 +649,9 @@ static void IRAM_ATTR ws2812_rmt_adapter(const void *src, rmt_item32_t *dest, si
         size_t channel_idx = byte_offset % 3;
 
         const CRGB& p = s_rmt_ctx.leds[pixel_idx];
-        uint8_t r = scale8(p.r, s_rmt_ctx.scale_r);
-        uint8_t g = scale8(p.g, s_rmt_ctx.scale_g);
-        uint8_t b = scale8(p.b, s_rmt_ctx.scale_b);
+        uint8_t r = scale8_video(p.r, s_rmt_ctx.scale_r);
+        uint8_t g = scale8_video(p.g, s_rmt_ctx.scale_g);
+        uint8_t b = scale8_video(p.b, s_rmt_ctx.scale_b);
 
         uint8_t c0, c1, c2;
         switch (s_rmt_ctx.order) {
@@ -816,9 +819,9 @@ static void ws2812_rp2040_send(const CRGB* leds, uint16_t num_leds,
     if (!s_rp2040_pio || s_rp2040_sm < 0 || !leds || num_leds == 0) return;
 
     for (uint16_t i = 0; i < num_leds; i++) {
-        uint8_t r = scale8(leds[i].r, scale_r);
-        uint8_t g = scale8(leds[i].g, scale_g);
-        uint8_t b = scale8(leds[i].b, scale_b);
+        uint8_t r = scale8_video(leds[i].r, scale_r);
+        uint8_t g = scale8_video(leds[i].g, scale_g);
+        uint8_t b = scale8_video(leds[i].b, scale_b);
 
         uint8_t c0, c1, c2;
         switch (order) {
@@ -926,9 +929,9 @@ void TinyLEDController::show() {
                                                      m_max_power_mA);
     }
 
-    uint8_t scale_r = scale8(effective_brightness, m_correction.r);
-    uint8_t scale_g = scale8(effective_brightness, m_correction.g);
-    uint8_t scale_b = scale8(effective_brightness, m_correction.b);
+    uint8_t scale_r = scale8_video(effective_brightness, m_correction.r);
+    uint8_t scale_g = scale8_video(effective_brightness, m_correction.g);
+    uint8_t scale_b = scale8_video(effective_brightness, m_correction.b);
 
 #if defined(_TINYLED_PLATFORM_ESP8266)
     ws2812_esp8266_send(m_pin, m_leds, m_num_leds, scale_r, scale_g, scale_b, m_order);
